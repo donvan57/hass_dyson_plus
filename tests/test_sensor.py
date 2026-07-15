@@ -24,6 +24,7 @@ from custom_components.hass_dyson.const import DOMAIN
 from custom_components.hass_dyson.sensor import (
     DysonFilterLifeSensor,
     DysonFormaldehydeSensor,
+    DysonHEPAFilterTypeSensor,
     DysonHumiditySensor,
     DysonNO2Sensor,
     DysonP25RSensor,
@@ -32,6 +33,21 @@ from custom_components.hass_dyson.sensor import (
     DysonTemperatureSensor,
     async_setup_entry,
 )
+
+
+def test_hepa_filter_type_sensor_uses_model_aware_device_property(
+    pure_mock_coordinator, pure_mock_hass
+):
+    """Legacy Link filter type comes from the device abstraction, not hflt."""
+    pure_mock_coordinator.data["product-state"] = {"filf": "4300"}
+    pure_mock_coordinator.device.hepa_filter_type = "Legacy combination filter"
+    sensor = DysonHEPAFilterTypeSensor(pure_mock_coordinator)
+    sensor.hass = pure_mock_hass
+
+    with patch.object(sensor, "async_write_ha_state"):
+        sensor._handle_coordinator_update()
+
+    assert sensor.native_value == "Legacy combination filter"
 
 
 class TestSensorPlatformSetup:

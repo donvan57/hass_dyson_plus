@@ -2710,9 +2710,9 @@ class DysonHEPAFilterTypeSensor(DysonEntity, SensorEntity):
             self._attr_native_value = None
             return
 
-        # Get HEPA filter type from device data
-        device_data = self.coordinator.data.get("product-state", {})
-        filter_type = device_data.get("hflt", "NONE")
+        # Use the device property so legacy Link models that report ``filf``
+        # instead of ``hflt`` are identified correctly.
+        filter_type = self.coordinator.device.hepa_filter_type
 
         # Convert "NONE" to "Not Installed", otherwise return the actual type
         if filter_type == "NONE":
