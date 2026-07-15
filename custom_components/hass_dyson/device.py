@@ -2526,6 +2526,14 @@ class DysonDevice:
         try:
             product_state = self._state_data.get("product-state", {})
 
+            # Legacy Link models (475/469/455) expose one filter-life value as
+            # remaining hours in `filf`, rather than hflr/cflr percentages.
+            # Dyson/libdyson defines a new filter as 4300 remaining hours.
+            filf = product_state.get("filf")
+            if filf not in (None, "INV"):
+                remaining_hours = int(filf)
+                return max(0, min(100, round(remaining_hours / 4300 * 100)))
+
             # Check filter types to determine which field to use
             hflt = product_state.get("hflt", "NONE")
             cflt = product_state.get("cflt", "NONE")
@@ -2583,6 +2591,8 @@ class DysonDevice:
     def hepa_filter_type(self) -> str:
         """Return HEPA filter type."""
         product_state = self._state_data.get("product-state", {})
+        if product_state.get("filf") not in (None, "INV"):
+            return "Legacy combination filter"
         filter_type = self.get_state_value(product_state, "hflt", "NONE")
         _LOGGER.debug("HEPA filter type for %s: %s", self._log_serial, filter_type)
         return filter_type
@@ -2952,11 +2962,31 @@ class DysonDevice:
 
     async def reset_hepa_filter_life(self) -> None:
         """Reset HEPA filter life to 100%."""
-        await self.send_command("STATE-SET", {"hflr": "0100"})
+        await self._reset_filter_life()
 
     async def reset_carbon_filter_life(self) -> None:
         """Reset carbon filter life to 100%."""
-        await self.send_command("STATE-SET", {"cflr": "0100"})
+        await self._reset_filter_life()
+
+    async def _reset_filter_life(self) -> None:
+        """Reset the installed filter set using Dyson's maintenance command."""
+        if not self._connected or not self._mqtt_client:
+            raise RuntimeError(f"Device {self.serial_number} is not connected")
+
+        command_topic = f"{self.mqtt_prefix}/{self.serial_number}/command"
+        command_json = json.dumps(
+            {
+                "msg": "STATE-SET",
+                "time": self._get_timestamp(),
+                "mode-reason": "LAPP",
+                "data": {"rstf": "RSTF"},
+            }
+        )
+        await self.hass.async_add_executor_job(
+            self._mqtt_client.publish, command_topic, command_json, 1
+        )
+        await asyncio.sleep(1)
+        await self._request_current_state()
 
     async def set_sleep_timer(self, minutes: int) -> None:
         """Set sleep timer in minutes (0 to cancel, 15-540 for active timer)."""

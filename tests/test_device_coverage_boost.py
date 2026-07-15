@@ -11,6 +11,7 @@ This module targets specific uncovered areas in device.py:
 """
 
 import asyncio
+import json
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -534,6 +535,24 @@ class TestFilterLifeCalculations:
         result = mock_device_basic.hepa_filter_life
         assert result == 100
 
+    @pytest.mark.parametrize(
+        ("remaining_hours", "expected_percentage"),
+        [("0000", 0), ("2150", 50), ("4300", 100), ("5000", 100)],
+    )
+    def test_legacy_link_filter_life_percentage(
+        self, mock_device_basic, remaining_hours, expected_percentage
+    ):
+        """Test legacy 475/469/455 filf hours are converted to percent."""
+        mock_device_basic._state_data = {
+            "product-state": {"filf": remaining_hours}
+        }
+        assert mock_device_basic.hepa_filter_life == expected_percentage
+
+    def test_legacy_link_filter_type(self, mock_device_basic):
+        """Test a legacy filf field identifies an installed combination filter."""
+        mock_device_basic._state_data = {"product-state": {"filf": "4300"}}
+        assert mock_device_basic.hepa_filter_type == "Legacy combination filter"
+
     def test_carbon_filter_life_calculation(self, mock_device_basic):
         """Test carbon filter life percentage calculation."""
         mock_device_basic._state_data = {"product-state": {"cflr": "70"}}
@@ -566,22 +585,41 @@ class TestFilterLifeCalculations:
     @pytest.mark.asyncio
     async def test_reset_hepa_filter_life(self, mock_device_basic):
         """Test resetting HEPA filter life."""
-        mock_device_basic._connected = True
-        mock_device_basic.send_command = AsyncMock()
+        mock_device_basic._reset_filter_life = AsyncMock()
 
         await mock_device_basic.reset_hepa_filter_life()
 
-        mock_device_basic.send_command.assert_called_once()
+        mock_device_basic._reset_filter_life.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_reset_carbon_filter_life(self, mock_device_basic):
         """Test resetting carbon filter life."""
-        mock_device_basic._connected = True
-        mock_device_basic.send_command = AsyncMock()
+        mock_device_basic._reset_filter_life = AsyncMock()
 
         await mock_device_basic.reset_carbon_filter_life()
 
-        mock_device_basic.send_command.assert_called_once()
+        mock_device_basic._reset_filter_life.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_reset_filter_uses_legacy_maintenance_command(
+        self, mock_device_basic
+    ):
+        """Test reset uses rstf, LAPP, and QoS 1 before refreshing state."""
+        mock_device_basic._connected = True
+        mock_device_basic._mqtt_client = MagicMock()
+        mock_device_basic._request_current_state = AsyncMock()
+        mock_device_basic.hass.async_add_executor_job = AsyncMock()
+
+        with patch("custom_components.hass_dyson.device.asyncio.sleep", AsyncMock()):
+            await mock_device_basic._reset_filter_life()
+
+        args = mock_device_basic.hass.async_add_executor_job.await_args.args
+        assert args[1] == "475/TEST-SERIAL-123/command"
+        payload = json.loads(args[2])
+        assert payload["mode-reason"] == "LAPP"
+        assert payload["data"] == {"rstf": "RSTF"}
+        assert args[3] == 1
+        mock_device_basic._request_current_state.assert_awaited_once()
 
 
 class TestRobotVacuumState:
